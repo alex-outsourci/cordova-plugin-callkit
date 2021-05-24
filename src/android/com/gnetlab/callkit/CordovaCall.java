@@ -111,14 +111,15 @@ public class CordovaCall extends CordovaPlugin {
     @Override
     public void onResume(boolean multitasking) {
         super.onResume(multitasking);
-        this.checkCallPermission();
+        this.checkCallPermission(null);
     }
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
         this.callbackContext = callbackContext;
         if (action.equals("receiveCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(1);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn != null) {
                 if (conn.getState() == Connection.STATE_ACTIVE) {
                     this.callbackContext.error("You can't receive a call right now because you're already in a call");
@@ -129,11 +130,12 @@ public class CordovaCall extends CordovaPlugin {
                 from = args.getString(0);
                 permissionCounter = 2;
                 pendingAction = "receiveCall";
-                this.checkCallPermission();
+                this.checkCallPermission(connId);
             }
             return true;
         } else if (action.equals("sendCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(1);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn != null) {
                 if (conn.getState() == Connection.STATE_ACTIVE) {
                     this.callbackContext.error("You can't make a call right now because you're already in a call");
@@ -146,22 +148,21 @@ public class CordovaCall extends CordovaPlugin {
                 to = args.getString(0);
                 permissionCounter = 2;
                 pendingAction = "sendCall";
-                this.checkCallPermission();
-                /*cordova.getThreadPool().execute(new Runnable() {
-                    public void run() {
-                        getCallPhonePermission();
-                    }
-                });*/
+                this.checkCallPermission(connId);
             }
             return true;
         } else if (action.equals("connectCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(0);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn == null) {
                 this.callbackContext.error("No call exists for you to connect");
             } else if (conn.getState() == Connection.STATE_ACTIVE) {
                 this.callbackContext.error("Your call is already connected");
             } else {
+                // Activate connection
                 conn.setActive();
+                MyConnectionService.setActiveConnection(connId);
+
                 Intent intent = new Intent(this.cordova.getActivity().getApplicationContext(), this.cordova.getActivity().getClass());
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 this.cordova.getActivity().getApplicationContext().startActivity(intent);
@@ -169,19 +170,24 @@ public class CordovaCall extends CordovaPlugin {
             }
             return true;
         } else if (action.equals("endCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            final String connId = args.getString(0);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn == null) {
                 this.callbackContext.error("No call exists for you to end");
             } else {
+                // Deactivate connection
                 DisconnectCause cause = new DisconnectCause(DisconnectCause.LOCAL);
                 conn.setDisconnected(cause);
                 conn.destroy();
-                MyConnectionService.deinitConnection();
+                MyConnectionService.closeConnection(connId);
+
+                // Trigger events
                 ArrayList<CallbackContext> callbackContexts = CordovaCall.getCallbackContexts().get("hangup");
                 for (final CallbackContext cbContext : callbackContexts) {
                     cordova.getThreadPool().execute(new Runnable() {
                         public void run() {
-                            PluginResult result = new PluginResult(PluginResult.Status.OK, "hangup event called successfully");
+                            JSONObject data = new JSONObject().put("callId", connId);
+                            PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             cbContext.sendPluginResult(result);
                         }
@@ -249,14 +255,14 @@ public class CordovaCall extends CordovaPlugin {
         return false;
     }
 
-    private void checkCallPermission() {
+    private void checkCallPermission(String connId) {
         if (permissionCounter >= 1) {
             PhoneAccount currentPhoneAccount = tm.getPhoneAccount(handle);
             if (currentPhoneAccount.isEnabled()) {
                 if (pendingAction == "receiveCall") {
-                    this.receiveCall();
+                    this.receiveCall(connId);
                 } else if (pendingAction == "sendCall") {
-                    this.sendCall();
+                    this.sendCall(connId);
                 }
             } else {
                 if (permissionCounter == 2) {
@@ -271,23 +277,29 @@ public class CordovaCall extends CordovaPlugin {
         permissionCounter--;
     }
 
-    private void receiveCall() {
-        Bundle callInfo = new Bundle();
-        callInfo.putString("from", from);
-        tm.addNewIncomingCall(handle, callInfo);
+    private void receiveCall(String connId) {
+        Bundle callExtras = new Bundle();
+        callExtras.putString("id", connId);
+        callExtras.putString("from", from);
+
+        tm.addNewIncomingCall(handle, callExtras);
         permissionCounter = 0;
         this.callbackContext.success("Incoming call successful");
     }
 
-    private void sendCall() {
+    private void sendCall(String connId) {
         Uri uri = Uri.fromParts("tel", to, null);
-        Bundle callInfoBundle = new Bundle();
-        callInfoBundle.putString("to", to);
+
+        Bundle callExtras = new Bundle();
+        callExtras.putString("id", connId);
+        callExtras.putString("to", to);
+
         Bundle callInfo = new Bundle();
-        callInfo.putParcelable(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, callInfoBundle);
+        callInfo.putParcelable(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, callExtras);
         callInfo.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle);
         callInfo.putBoolean(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, true);
         tm.placeCall(uri, callInfo);
+
         permissionCounter = 0;
         this.callbackContext.success("Outgoing call successful");
     }
@@ -430,7 +442,9 @@ public class CordovaCall extends CordovaPlugin {
         return false;
     }
 
-    /** Private NEW API */
+    /**
+     * Private NEW API
+     */
 
     private boolean earpieceOn() {
         Connection conn = MyConnectionService.getConnection();

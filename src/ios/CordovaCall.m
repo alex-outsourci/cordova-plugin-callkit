@@ -173,7 +173,6 @@ BOOL enableDTMF = NO;
 - (void)receiveCall:(CDVInvokedUrlCommand*)command
 {
     BOOL hasId = ![[command.arguments objectAtIndex:1] isEqual:[NSNull null]];
-    CDVPluginResult* pluginResult = nil;
     NSString* callName = [command.arguments objectAtIndex:0];
     NSString* callId = hasId?[command.arguments objectAtIndex:1]:callName;
     NSUUID *callUUID = [[NSUUID alloc] init];
@@ -183,6 +182,7 @@ BOOL enableDTMF = NO;
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
 
+    CDVPluginResult* pluginResult = nil;
     if (callName != nil && [callName length] > 0) {
         CXHandle *handle = [[CXHandle alloc] initWithType:CXHandleTypePhoneNumber value:callId];
         CXCallUpdate *callUpdate = [[CXCallUpdate alloc] init];
@@ -203,7 +203,8 @@ BOOL enableDTMF = NO;
         }];
         for (id callbackId in callbackIds[@"receiveCall"]) {
             CDVPluginResult* pluginResult = nil;
-            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"receiveCall event called successfully"];
+            NSDictionary *callData = @{@"callId": callId, @"message": @"receiveCall event called successfully"};
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
             [pluginResult setKeepCallbackAsBool:YES];
             [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
         }
@@ -237,6 +238,13 @@ BOOL enableDTMF = NO;
                 [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:command.callbackId];
             }
         }];
+        for (id callbackId in callbackIds[@"sendCall"]) {
+            CDVPluginResult* pluginResult = nil;
+            NSDictionary *callData = @{@"callId": callId, @"message": @"sendCall event called successfully"};
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
+            [pluginResult setKeepCallbackAsBool:YES];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
+        }
     } else {
         [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The caller id can't be empty"] callbackId:command.callbackId];
     }
@@ -244,11 +252,18 @@ BOOL enableDTMF = NO;
 
 - (void)connectCall:(CDVInvokedUrlCommand*)command
 {
-    CDVPluginResult* pluginResult = nil;
-    NSArray<CXCall *> *calls = self.callController.callObserver.calls;
+    // get call id
+    BOOL hasId = ![[command.arguments objectAtIndex:0] isEqual:[NSNull null]];
+    NSString* callId = hasId?[command.arguments objectAtIndex:0]:nil;
 
-    if([calls count] == 1) {
-        [self.provider reportOutgoingCallWithUUID:calls[0].UUID connectedAtDate:nil];
+    // filter calls by call id
+    NSArray<CXCall *> *calls = self.callController.callObserver.calls;
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
+
+    CDVPluginResult* pluginResult = nil;
+    if([found count] == 1) {
+        [self.provider reportOutgoingCallWithUUID:found[0].UUID connectedAtDate:nil];
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Call connected successfully"];
     } else {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"No call exists for you to connect"];
@@ -259,12 +274,19 @@ BOOL enableDTMF = NO;
 
 - (void)endCall:(CDVInvokedUrlCommand*)command
 {
-    CDVPluginResult* pluginResult = nil;
-    NSArray<CXCall *> *calls = self.callController.callObserver.calls;
+    // get call id
+    BOOL hasId = ![[command.arguments objectAtIndex:0] isEqual:[NSNull null]];
+    NSString* callId = hasId?[command.arguments objectAtIndex:0]:nil;
 
-    if([calls count] == 1) {
-        //[self.provider reportCallWithUUID:calls[0].UUID endedAtDate:nil reason:CXCallEndedReasonRemoteEnded];
-        CXEndCallAction *endCallAction = [[CXEndCallAction alloc] initWithCallUUID:calls[0].UUID];
+    // filter calls by call id
+    NSArray<CXCall *> *calls = self.callController.callObserver.calls;
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
+
+    CDVPluginResult* pluginResult = nil;
+    if([found count] == 1) {
+        //[self.provider reportCallWithUUID:found[0].UUID endedAtDate:nil reason:CXCallEndedReasonRemoteEnded];
+        CXEndCallAction *endCallAction = [[CXEndCallAction alloc] initWithCallUUID:found[0].UUID];
         CXTransaction *transaction = [[CXTransaction alloc] initWithAction:endCallAction];
         [self.callController requestTransaction:transaction completion:^(NSError * _Nullable error) {
             if (error == nil) {
@@ -477,9 +499,12 @@ BOOL enableDTMF = NO;
 {
     [self setupAudioSession];
     [action fulfill];
+
+    NSString *callId = [action.callUUID UUIDString];
+    NSDictionary *callData = @{@"callId": callId, @"message": @"answer event called successfully"};
     for (id callbackId in callbackIds[@"answer"]) {
         CDVPluginResult* pluginResult = nil;
-        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"answer event called successfully"];
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
         [pluginResult setKeepCallbackAsBool:YES];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
     }
@@ -488,19 +513,25 @@ BOOL enableDTMF = NO;
 
 - (void)provider:(CXProvider *)provider performEndCallAction:(CXEndCallAction *)action
 {
+    NSString *callId = [action.callUUID UUIDString];
     NSArray<CXCall *> *calls = self.callController.callObserver.calls;
-    if([calls count] == 1) {
-        if(calls[0].hasConnected) {
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
+
+    if([found count] == 1) {
+        if(found[0].hasConnected) {
             for (id callbackId in callbackIds[@"hangup"]) {
                 CDVPluginResult* pluginResult = nil;
-                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"hangup event called successfully"];
+                NSDictionary *callData = @{@"callId": callId, @"message": @"hangup event called successfully"};
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
                 [pluginResult setKeepCallbackAsBool:YES];
                 [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
             }
         } else {
             for (id callbackId in callbackIds[@"reject"]) {
                 CDVPluginResult* pluginResult = nil;
-                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"reject event called successfully"];
+                NSDictionary *callData = @{@"callId": callId, @"message": @"reject event called successfully"};
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
                 [pluginResult setKeepCallbackAsBool:YES];
                 [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
             }
@@ -595,7 +626,7 @@ BOOL enableDTMF = NO;
         NSArray* args = [NSArray arrayWithObjects:[caller valueForKey:@"Username"], [caller valueForKey:@"ConnectionId"], nil];
         
         CDVInvokedUrlCommand* newCommand = [[CDVInvokedUrlCommand alloc] initWithArguments:args callbackId:@"" className:self.VoIPPushClassName methodName:self.VoIPPushMethodName];
-        
+
         [self receiveCall:newCommand];
     }
     @catch (NSException *exception) {
