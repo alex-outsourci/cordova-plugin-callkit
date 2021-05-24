@@ -186,7 +186,7 @@ public class CordovaCall extends CordovaPlugin {
                 for (final CallbackContext cbContext : callbackContexts) {
                     cordova.getThreadPool().execute(new Runnable() {
                         public void run() {
-                            JSONObject data = new JSONObject().put("callId", connId);
+                            JSONObject data = MyConnectionService.getConnectionResult(connId);
                             PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             cbContext.sendPluginResult(result);
@@ -320,7 +320,7 @@ public class CordovaCall extends CordovaPlugin {
         }
         switch (requestCode) {
             case CALL_PHONE_REQ_CODE:
-                this.sendCall();
+                this.sendCall(null);
                 break;
             case REAL_PHONE_CALL:
                 this.callNumber();
@@ -447,7 +447,7 @@ public class CordovaCall extends CordovaPlugin {
      */
 
     private boolean earpieceOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_WIRED_OR_EARPIECE);
         } else {
@@ -465,7 +465,7 @@ public class CordovaCall extends CordovaPlugin {
     }
 
     private boolean bluetoothOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_BLUETOOTH);
         } else {
@@ -482,7 +482,7 @@ public class CordovaCall extends CordovaPlugin {
     }
 
     private boolean speakerOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_SPEAKER);
         } else {
@@ -500,7 +500,7 @@ public class CordovaCall extends CordovaPlugin {
     }
 
     private boolean normalOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_EARPIECE);
         } else {

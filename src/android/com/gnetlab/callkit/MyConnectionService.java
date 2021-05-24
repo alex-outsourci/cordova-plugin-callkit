@@ -18,6 +18,7 @@ import android.net.Uri;
 import java.util.ArrayList;
 
 import android.util.Log;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 public class MyConnectionService extends ConnectionService {
@@ -69,6 +70,16 @@ public class MyConnectionService extends ConnectionService {
         }
     }
 
+    public static JSONObject getConnectionResult(String connId) {
+        JSONObject data = new JSONObject();
+        try {
+            data.put("callId", connId);
+            return data;
+        } catch (JSONException e) {
+            return data;
+        }
+    }
+
     @Override
     public Connection onCreateIncomingConnection(final PhoneAccountHandle connectionManagerPhoneAccount, final ConnectionRequest request) {
         final Connection connection = new Connection() {
@@ -86,7 +97,7 @@ public class MyConnectionService extends ConnectionService {
                 for (final CallbackContext callbackContext : callbackContexts) {
                     CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                         public void run() {
-                            JSONObject data = new JSONObject().put("callId", connId);
+                            JSONObject data = getConnectionResult(connId);
                             PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             callbackContext.sendPluginResult(result);
@@ -108,7 +119,7 @@ public class MyConnectionService extends ConnectionService {
                 for (final CallbackContext callbackContext : callbackContexts) {
                     CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                         public void run() {
-                            JSONObject data = new JSONObject().put("callId", connId);
+                            JSONObject data = getConnectionResult(connId);
                             PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             callbackContext.sendPluginResult(result);
@@ -135,7 +146,7 @@ public class MyConnectionService extends ConnectionService {
                 for (final CallbackContext callbackContext : callbackContexts) {
                     CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                         public void run() {
-                            JSONObject data = new JSONObject().put("callId", connId);
+                            JSONObject data = getConnectionResult(connId);
                             PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             callbackContext.sendPluginResult(result);
@@ -171,7 +182,7 @@ public class MyConnectionService extends ConnectionService {
         for (final CallbackContext callbackContext : callbackContexts) {
             CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                 public void run() {
-                    JSONObject data = new JSONObject().put("callId", connId);
+                    JSONObject data = getConnectionResult(connId);
                     PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                     result.setKeepCallback(true);
                     callbackContext.sendPluginResult(result);
@@ -213,7 +224,7 @@ public class MyConnectionService extends ConnectionService {
                 for (final CallbackContext callbackContext : callbackContexts) {
                     CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                         public void run() {
-                            JSONObject data = new JSONObject().put("callId", connId);
+                            JSONObject data = getConnectionResult(connId);
                             PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             callbackContext.sendPluginResult(result);
@@ -266,7 +277,7 @@ public class MyConnectionService extends ConnectionService {
             for (final CallbackContext callbackContext : callbackContexts) {
                 CordovaCall.getCordova().getThreadPool().execute(new Runnable() {
                     public void run() {
-                        JSONObject data = new JSONObject().put("callId", connId);
+                        JSONObject data = getConnectionResult(connId);
                         PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                         result.setKeepCallback(true);
                         callbackContext.sendPluginResult(result);
