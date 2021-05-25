@@ -164,6 +164,8 @@ public class MyConnectionService extends ConnectionService {
         connBundle.putString("id", connId);
         connection.putExtras(connBundle);
 
+        Log.v(TAG, "onCreateIncomingConnection: " + connId);
+
         Icon icon = CordovaCall.getIcon();
         if (icon != null) {
             StatusHints statusHints = new StatusHints((CharSequence) "", icon, new Bundle());
@@ -193,7 +195,7 @@ public class MyConnectionService extends ConnectionService {
     }
 
     @Override
-    public Connection onCreateOutgoingConnection(PhoneAccountHandle connectionManagerPhoneAccount, ConnectionRequest request) {
+    public Connection onCreateOutgoingConnection(final PhoneAccountHandle connectionManagerPhoneAccount, final ConnectionRequest request) {
         final Connection connection = new Connection() {
             @Override
             public void onAnswer() {
@@ -257,11 +259,15 @@ public class MyConnectionService extends ConnectionService {
         connBundle.putString("id", connId);
         connection.putExtras(connBundle);
 
+        Log.v(TAG, "onCreateOutgoingConnection: " + connId);
+
         Icon icon = CordovaCall.getIcon();
         if (icon != null) {
             StatusHints statusHints = new StatusHints((CharSequence) "", icon, new Bundle());
             connection.setStatusHints(statusHints);
         }
+
+        // Could setActive();
         connection.setDialing();
 
         // add to connections
@@ -286,5 +292,12 @@ public class MyConnectionService extends ConnectionService {
             }
         }
         return connection;
+    }
+
+    public Connection onCreateUnknownConnection(PhoneAccountHandle connectionManagerPhoneAccount,
+                                                ConnectionRequest request) {
+        final String connId = request.getExtras().getString("id");
+        Log.v(TAG, "Create unknown call: " + connId);
+        return null;
     }
 }
