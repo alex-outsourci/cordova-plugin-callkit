@@ -13,6 +13,7 @@ NSString* icon;
 BOOL includeInRecents = NO;
 NSMutableDictionary *callbackIds;
 NSDictionary* pendingCallFromRecents;
+NSMutableDictionary* pendingCalls;
 BOOL monitorAudioRouteChange = NO;
 BOOL enableDTMF = NO;
 
@@ -45,6 +46,8 @@ BOOL enableDTMF = NO;
     [callbackIds setObject:[NSMutableArray array] forKey:@"speakerOn"];
     [callbackIds setObject:[NSMutableArray array] forKey:@"speakerOff"];
     [callbackIds setObject:[NSMutableArray array] forKey:@"DTMF"];
+    // init pending calls
+    pendingCalls = [[NSMutableDictionary alloc]init];
     //allows user to make call from recents
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(receiveCallFromRecents:) name:@"RecentsCallNotification" object:nil];
     //detect Audio Route Changes to make speakerOn and speakerOff event handlers
@@ -86,10 +89,10 @@ BOOL enableDTMF = NO;
       NSTimeInterval bufferDuration = .005;
       [sessionInstance setPreferredIOBufferDuration:bufferDuration error:nil];
       [sessionInstance setPreferredSampleRate:44100 error:nil];
-      NSLog(@"Configuring Audio");
+      NSLog(@"[CordovaCall] Configuring Audio");
     }
     @catch (NSException *exception) {
-       NSLog(@"Unknown error returned from setupAudioSession");
+       NSLog(@"[CordovaCall] Unknown error returned from setupAudioSession");
     }
     return;
 }
@@ -177,12 +180,14 @@ BOOL enableDTMF = NO;
     NSString* callId = hasId?[command.arguments objectAtIndex:1]:callName;
     NSUUID *callUUID = [[NSUUID alloc] init];
 
+    NSLog(@"[CordovaCall] ReceiveCall %@ [%@]", callId, callUUID);
+    [pendingCalls setObject:callId forKey:callUUID];
+
     if (hasId) {
         [[NSUserDefaults standardUserDefaults] setObject:callName forKey:[command.arguments objectAtIndex:1]];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }
 
-    CDVPluginResult* pluginResult = nil;
     if (callName != nil && [callName length] > 0) {
         CXHandle *handle = [[CXHandle alloc] initWithType:CXHandleTypePhoneNumber value:callId];
         CXCallUpdate *callUpdate = [[CXCallUpdate alloc] init];
@@ -196,7 +201,10 @@ BOOL enableDTMF = NO;
 
         [self.provider reportNewIncomingCallWithUUID:callUUID update:callUpdate completion:^(NSError * _Nullable error) {
             if(error == nil) {
-                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Incoming call successful"] callbackId:command.callbackId];
+                CDVPluginResult* pluginResult = nil;
+                NSDictionary *callData = @{@"callId": callId, @"message": @"Incoming call successful"};
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
             } else {
                 [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:command.callbackId];
             }
@@ -220,6 +228,9 @@ BOOL enableDTMF = NO;
     NSString* callId = hasId?[command.arguments objectAtIndex:1]:callName;
     NSUUID *callUUID = [[NSUUID alloc] init];
 
+    NSLog(@"[CordovaCall] SendCall %@ [%@]", callId, callUUID);
+    [pendingCalls setObject:callId forKey:callUUID];
+
     if (hasId) {
         [[NSUserDefaults standardUserDefaults] setObject:callName forKey:[command.arguments objectAtIndex:1]];
         [[NSUserDefaults standardUserDefaults] synchronize];
@@ -233,7 +244,10 @@ BOOL enableDTMF = NO;
         CXTransaction *transaction = [[CXTransaction alloc] initWithAction:startCallAction];
         [self.callController requestTransaction:transaction completion:^(NSError * _Nullable error) {
             if (error == nil) {
-                [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Outgoing call successful"] callbackId:command.callbackId];
+                CDVPluginResult* pluginResult = nil;
+                NSDictionary *callData = @{@"callId": callId, @"message": @"Outgoing call successful"};
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:callData];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
             } else {
                 [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:command.callbackId];
             }
@@ -255,10 +269,13 @@ BOOL enableDTMF = NO;
     // get call id
     BOOL hasId = ![[command.arguments objectAtIndex:0] isEqual:[NSNull null]];
     NSString* callId = hasId?[command.arguments objectAtIndex:0]:nil;
+    NSArray* callUUIDs = [pendingCalls allKeysForObject:callId];
+    NSUUID* callUUID = [callUUIDs count] > 0 ? callUUIDs[0] : nil;
+    NSLog(@"[CordovaCall] ConnectCall -> %@ [%@]", callId, callUUID);
 
     // filter calls by call id
     NSArray<CXCall *> *calls = self.callController.callObserver.calls;
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callUUID];
     NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
 
     CDVPluginResult* pluginResult = nil;
@@ -277,10 +294,13 @@ BOOL enableDTMF = NO;
     // get call id
     BOOL hasId = ![[command.arguments objectAtIndex:0] isEqual:[NSNull null]];
     NSString* callId = hasId?[command.arguments objectAtIndex:0]:nil;
+    NSArray* callUUIDs = [pendingCalls allKeysForObject:callId];
+    NSUUID* callUUID = [callUUIDs count] > 0 ? callUUIDs[0] : nil;
+    NSLog(@"[CordovaCall] EndCall -> %@ [%@]", callId, callUUID);
 
     // filter calls by call id
     NSArray<CXCall *> *calls = self.callController.callObserver.calls;
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callUUID];
     NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
 
     CDVPluginResult* pluginResult = nil;
@@ -291,7 +311,7 @@ BOOL enableDTMF = NO;
         [self.callController requestTransaction:transaction completion:^(NSError * _Nullable error) {
             if (error == nil) {
             } else {
-                NSLog(@"%@",[error localizedDescription]);
+                NSLog(@"[CordovaCall] error: %@",[error localizedDescription]);
             }
         }];
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Call ended successfully"];
@@ -419,7 +439,7 @@ BOOL enableDTMF = NO;
     [self.callController requestTransaction:transaction completion:^(NSError * _Nullable error) {
         if (error == nil) {
         } else {
-            NSLog(@"%@",[error localizedDescription]);
+            NSLog(@"[CordovaCall] error: %@",[error localizedDescription]);
         }
     }];
 }
@@ -454,7 +474,7 @@ BOOL enableDTMF = NO;
 // CallKit - Provider
 - (void)providerDidReset:(CXProvider *)provider
 {
-    NSLog(@"%s","providerdidreset");
+    NSLog(@"[CordovaCall] %s","providerdidreset");
 }
 
 - (void)provider:(CXProvider *)provider performStartCallAction:(CXStartCallAction *)action
@@ -468,7 +488,9 @@ BOOL enableDTMF = NO;
     callUpdate.supportsUngrouping = NO;
     callUpdate.supportsHolding = NO;
     callUpdate.supportsDTMF = enableDTMF;
-    
+
+    NSLog(@"[CordovaCall] performStartCallAction %@ [%@]", action.handle.value, action.callUUID);
+    [pendingCalls setObject:action.handle.value forKey:action.callUUID];
     [self.provider reportCallWithUUID:action.callUUID updated:callUpdate];
     [action fulfill];
     NSDictionary *callData = @{@"callName":action.contactIdentifier, @"callId": action.handle.value, @"isVideo": action.video?@YES:@NO, @"message": @"sendCall event called successfully"};
@@ -486,13 +508,13 @@ BOOL enableDTMF = NO;
 
 - (void)provider:(CXProvider *)provider didActivateAudioSession:(AVAudioSession *)audioSession
 {
-    NSLog(@"activated audio");
+    NSLog(@"[CordovaCall] activated audio");
     monitorAudioRouteChange = YES;
 }
 
 - (void)provider:(CXProvider *)provider didDeactivateAudioSession:(AVAudioSession *)audioSession
 {
-    NSLog(@"deactivated audio");
+    NSLog(@"[CordovaCall] deactivated audio");
 }
 
 - (void)provider:(CXProvider *)provider performAnswerCallAction:(CXAnswerCallAction *)action
@@ -500,7 +522,8 @@ BOOL enableDTMF = NO;
     [self setupAudioSession];
     [action fulfill];
 
-    NSString *callId = [action.callUUID UUIDString];
+    NSString *callId = pendingCalls[action.callUUID];
+    NSLog(@"[CordovaCall] performAnswerCallAction %@ [%@]", callId, action.callUUID);
     NSDictionary *callData = @{@"callId": callId, @"message": @"answer event called successfully"};
     for (id callbackId in callbackIds[@"answer"]) {
         CDVPluginResult* pluginResult = nil;
@@ -513,9 +536,13 @@ BOOL enableDTMF = NO;
 
 - (void)provider:(CXProvider *)provider performEndCallAction:(CXEndCallAction *)action
 {
-    NSString *callId = [action.callUUID UUIDString];
+    NSString *callId = pendingCalls[action.callUUID];
+    NSArray* callUUIDs = [pendingCalls allKeysForObject:callId];
+    NSUUID* callUUID = [callUUIDs count] > 0 ? callUUIDs[0] : nil;
+    NSLog(@"[CordovaCall] performEndCallAction %@ [%@]", callId, callUUID);
+
     NSArray<CXCall *> *calls = self.callController.callObserver.calls;
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callId];
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"UUID==%@", callUUID];
     NSArray<CXCall *> *found = [calls filteredArrayUsingPredicate:predicate];
 
     if([found count] == 1) {
@@ -537,6 +564,8 @@ BOOL enableDTMF = NO;
             }
         }
     }
+
+    [pendingCalls removeObjectForKey:action.callUUID];
     monitorAudioRouteChange = NO;
     [action fulfill];
     //[action fail];
@@ -557,7 +586,7 @@ BOOL enableDTMF = NO;
 
 - (void)provider:(CXProvider *)provider performPlayDTMFCallAction:(CXPlayDTMFCallAction *)action
 {
-    NSLog(@"DTMF Event");
+    NSLog(@"[CordovaCall] DTMF Event");
     NSString *digits = action.digits;
     [action fulfill];
     for (id callbackId in callbackIds[@"DTMF"]) {
@@ -572,7 +601,7 @@ BOOL enableDTMF = NO;
 - (void)init:(CDVInvokedUrlCommand*)command
 {
   self.VoIPPushCallbackId = command.callbackId;
-  NSLog(@"[objC] callbackId: %@", self.VoIPPushCallbackId);
+  NSLog(@"[PushKit] callbackId: %@", self.VoIPPushCallbackId);
 
   //http://stackoverflow.com/questions/27245808/implement-pushkit-and-test-in-development-behavior/28562124#28562124
   PKPushRegistry *pushRegistry = [[PKPushRegistry alloc] initWithQueue:dispatch_get_main_queue()];
@@ -582,12 +611,12 @@ BOOL enableDTMF = NO;
 
 - (void)pushRegistry:(PKPushRegistry *)registry didUpdatePushCredentials:(PKPushCredentials *)credentials forType:(NSString *)type{
     if([credentials.token length] == 0) {
-        NSLog(@"[objC] No device token!");
+        NSLog(@"[PushKit] No device token!");
         return;
     }
 
     //http://stackoverflow.com/a/9372848/534755
-    NSLog(@"[objC] Device token: %@", credentials.token);
+    NSLog(@"[PushKit] Device token: %@", credentials.token);
     const unsigned *tokenBytes = [credentials.token bytes];
     NSString *sToken = [NSString stringWithFormat:@"%08x%08x%08x%08x%08x%08x%08x%08x",
                          ntohl(tokenBytes[0]), ntohl(tokenBytes[1]), ntohl(tokenBytes[2]),
@@ -597,7 +626,7 @@ BOOL enableDTMF = NO;
     NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:2];
     [results setObject:sToken forKey:@"deviceToken"];
     [results setObject:@"true" forKey:@"registration"];
-    
+
     CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:results];
     [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]]; //[pluginResult setKeepCallbackAsBool:YES];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:self.VoIPPushCallbackId];
@@ -606,31 +635,31 @@ BOOL enableDTMF = NO;
 - (void)pushRegistry:(PKPushRegistry *)registry didReceiveIncomingPushWithPayload:(PKPushPayload *)payload forType:(NSString *)type
 {
     NSDictionary *payloadDict = payload.dictionaryPayload[@"aps"];
-    NSLog(@"[objC] didReceiveIncomingPushWithPayload: %@", payloadDict);
+    NSLog(@"[PushKit] didReceiveIncomingPushWithPayload: %@", payloadDict);
 
     NSString *message = payloadDict[@"alert"];
-    NSLog(@"[objC] received VoIP message: %@", message);
-    
+    NSLog(@"[PushKit] received VoIP message: %@", message);
+
     NSString *data = payload.dictionaryPayload[@"data"];
-    NSLog(@"[objC] received data: %@", data);
-    
+    NSLog(@"[PushKit] received data: %@", data);
+
     NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:2];
     [results setObject:message forKey:@"function"];
     [results setObject:data forKey:@"extra"];
-    
+
     @try {
         NSError* error;
         NSDictionary* json = [NSJSONSerialization JSONObjectWithData:[data dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
-        
+
         NSObject* caller = [json objectForKey:@"Caller"];
         NSArray* args = [NSArray arrayWithObjects:[caller valueForKey:@"Username"], [caller valueForKey:@"ConnectionId"], nil];
-        
+
         CDVInvokedUrlCommand* newCommand = [[CDVInvokedUrlCommand alloc] initWithArguments:args callbackId:@"" className:self.VoIPPushClassName methodName:self.VoIPPushMethodName];
 
         [self receiveCall:newCommand];
     }
     @catch (NSException *exception) {
-       NSLog(@"[objC] error: %@", exception.reason);
+       NSLog(@"[PushKit] error: %@", exception.reason);
     }
     @finally {
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:results];
