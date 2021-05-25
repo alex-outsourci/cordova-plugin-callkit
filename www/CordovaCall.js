@@ -4,6 +4,8 @@ exports.setAppName = function(appName, success, error) {
     exec(success, error, "CordovaCall", "setAppName", [appName]);
 };
 
+// TODO: add call id to be able manage exact connection
+
 exports.setIcon = function(iconName, success, error) {
     exec(success, error, "CordovaCall", "setIcon", [iconName]);
 };
@@ -36,11 +38,13 @@ exports.setVideo = function(value, success, error) {
     }
 };
 
+// done
+
 exports.receiveCall = function(from, id, success, error) {
     if(typeof id == "function") {
       error = success;
       success = id;
-      id = undefined;
+      id = null;
     } else if(id) {
       id = id.toString();
     }
@@ -51,19 +55,26 @@ exports.sendCall = function(to, id, success, error) {
     if(typeof id == "function") {
       error = success;
       success = id;
-      id = undefined;
+      id = null;
     } else if(id) {
       id = id.toString();
     }
     exec(success, error, "CordovaCall", "sendCall", [to, id]);
 };
 
-exports.connectCall = function(success, error) {
-    exec(success, error, "CordovaCall", "connectCall", []);
+exports.connectCall = function(id, success, error) {
+    if(typeof id == "function") {
+        id = null;
+    }
+    exec(success, error, "CordovaCall", "connectCall", [id]);
 };
 
-exports.endCall = function(success, error) {
-    exec(success, error, "CordovaCall", "endCall", []);
+exports.endCall = function(id, success, error) {
+    if(typeof id == "function") {
+        id = null;
+    }
+
+    exec(success, error, "CordovaCall", "endCall", [id]);
 };
 
 exports.callNumber = function(to, success, error) {

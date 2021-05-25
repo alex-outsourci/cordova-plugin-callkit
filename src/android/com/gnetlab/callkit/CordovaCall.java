@@ -30,6 +30,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 
 import android.graphics.drawable.Icon;
@@ -43,6 +44,7 @@ public class CordovaCall extends CordovaPlugin {
     public static final int REAL_PHONE_CALL = 1;
     private int permissionCounter = 0;
     private String pendingAction;
+    private String pendingConnId;
     private TelecomManager tm;
     private PhoneAccountHandle handle;
     private PhoneAccount phoneAccount;
@@ -111,14 +113,17 @@ public class CordovaCall extends CordovaPlugin {
     @Override
     public void onResume(boolean multitasking) {
         super.onResume(multitasking);
-        this.checkCallPermission();
+        this.checkCallPermission(null);
     }
 
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
+        Log.v(TAG, "Execute: " + action + ", [" + args.toString() + "]");
+
         this.callbackContext = callbackContext;
         if (action.equals("receiveCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(1);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn != null) {
                 if (conn.getState() == Connection.STATE_ACTIVE) {
                     this.callbackContext.error("You can't receive a call right now because you're already in a call");
@@ -129,11 +134,12 @@ public class CordovaCall extends CordovaPlugin {
                 from = args.getString(0);
                 permissionCounter = 2;
                 pendingAction = "receiveCall";
-                this.checkCallPermission();
+                this.checkCallPermission(connId);
             }
             return true;
         } else if (action.equals("sendCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(1);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn != null) {
                 if (conn.getState() == Connection.STATE_ACTIVE) {
                     this.callbackContext.error("You can't make a call right now because you're already in a call");
@@ -146,22 +152,39 @@ public class CordovaCall extends CordovaPlugin {
                 to = args.getString(0);
                 permissionCounter = 2;
                 pendingAction = "sendCall";
-                this.checkCallPermission();
-                /*cordova.getThreadPool().execute(new Runnable() {
+                pendingConnId = connId;
+                cordova.getThreadPool().execute(new Runnable() {
                     public void run() {
                         getCallPhonePermission();
                     }
-                });*/
+                });
+            }
+            return true;
+        } else if (action.equals("callNumber")) {
+            realCallTo = args.getString(0);
+            if (realCallTo == null) {
+                this.callbackContext.error("Call Failed. You need to enter a phone number.");
+            } else {
+                cordova.getThreadPool().execute(new Runnable() {
+                    public void run() {
+                        callNumberPhonePermission();
+                    }
+                });
+                this.callbackContext.success("Call Successful");
             }
             return true;
         } else if (action.equals("connectCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            String connId = args.getString(0);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn == null) {
                 this.callbackContext.error("No call exists for you to connect");
             } else if (conn.getState() == Connection.STATE_ACTIVE) {
                 this.callbackContext.error("Your call is already connected");
             } else {
+                // Activate connection
                 conn.setActive();
+                MyConnectionService.setActiveConnection(connId);
+
                 Intent intent = new Intent(this.cordova.getActivity().getApplicationContext(), this.cordova.getActivity().getClass());
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 this.cordova.getActivity().getApplicationContext().startActivity(intent);
@@ -169,19 +192,24 @@ public class CordovaCall extends CordovaPlugin {
             }
             return true;
         } else if (action.equals("endCall")) {
-            Connection conn = MyConnectionService.getConnection();
+            final String connId = args.getString(0);
+            Connection conn = MyConnectionService.getConnectionOrActive(connId);
             if (conn == null) {
                 this.callbackContext.error("No call exists for you to end");
             } else {
+                // Deactivate connection
                 DisconnectCause cause = new DisconnectCause(DisconnectCause.LOCAL);
                 conn.setDisconnected(cause);
                 conn.destroy();
-                MyConnectionService.deinitConnection();
+                MyConnectionService.closeConnection(connId);
+
+                // Trigger events
                 ArrayList<CallbackContext> callbackContexts = CordovaCall.getCallbackContexts().get("hangup");
                 for (final CallbackContext cbContext : callbackContexts) {
                     cordova.getThreadPool().execute(new Runnable() {
                         public void run() {
-                            PluginResult result = new PluginResult(PluginResult.Status.OK, "hangup event called successfully");
+                            JSONObject data = MyConnectionService.getConnectionResult(connId);
+                            PluginResult result = new PluginResult(PluginResult.Status.OK, data);
                             result.setKeepCallback(true);
                             cbContext.sendPluginResult(result);
                         }
@@ -222,19 +250,6 @@ public class CordovaCall extends CordovaPlugin {
                 this.callbackContext.error("This icon does not exist. Make sure to add it to the res/drawable folder the right way.");
             }
             return true;
-        } else if (action.equals("callNumber")) {
-            realCallTo = args.getString(0);
-            if (realCallTo != null) {
-                cordova.getThreadPool().execute(new Runnable() {
-                    public void run() {
-                        callNumberPhonePermission();
-                    }
-                });
-                this.callbackContext.success("Call Successful");
-            } else {
-                this.callbackContext.error("Call Failed. You need to enter a phone number.");
-            }
-            return true;
         } else if (action.equals("setAudioMode")) {
             String mode = args.getString(0);
             this.callbackContext.success(this.setAudioMode(mode).toString());
@@ -249,14 +264,15 @@ public class CordovaCall extends CordovaPlugin {
         return false;
     }
 
-    private void checkCallPermission() {
+    private void checkCallPermission(String connId) {
+        Log.v(TAG, "checkCallPermission: " + connId);
         if (permissionCounter >= 1) {
             PhoneAccount currentPhoneAccount = tm.getPhoneAccount(handle);
             if (currentPhoneAccount.isEnabled()) {
                 if (pendingAction == "receiveCall") {
-                    this.receiveCall();
+                    this.receiveCall(connId);
                 } else if (pendingAction == "sendCall") {
-                    this.sendCall();
+                    this.sendCall(connId);
                 }
             } else {
                 if (permissionCounter == 2) {
@@ -271,23 +287,29 @@ public class CordovaCall extends CordovaPlugin {
         permissionCounter--;
     }
 
-    private void receiveCall() {
-        Bundle callInfo = new Bundle();
-        callInfo.putString("from", from);
-        tm.addNewIncomingCall(handle, callInfo);
+    private void receiveCall(String connId) {
+        Bundle callExtras = new Bundle();
+        callExtras.putString("id", connId);
+        callExtras.putString("from", from);
+
+        tm.addNewIncomingCall(handle, callExtras);
         permissionCounter = 0;
         this.callbackContext.success("Incoming call successful");
     }
 
-    private void sendCall() {
+    private void sendCall(String connId) {
         Uri uri = Uri.fromParts("tel", to, null);
-        Bundle callInfoBundle = new Bundle();
-        callInfoBundle.putString("to", to);
+
+        Bundle callExtras = new Bundle();
+        callExtras.putString("id", connId);
+        callExtras.putString("to", to);
+
         Bundle callInfo = new Bundle();
-        callInfo.putParcelable(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, callInfoBundle);
+        callInfo.putParcelable(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, callExtras);
         callInfo.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle);
         callInfo.putBoolean(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, true);
         tm.placeCall(uri, callInfo);
+
         permissionCounter = 0;
         this.callbackContext.success("Outgoing call successful");
     }
@@ -300,6 +322,7 @@ public class CordovaCall extends CordovaPlugin {
 
     @Override
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
+        Log.v(TAG, "onRequestPermissionResult: " + requestCode + ", [" + Arrays.toString(grantResults) + "]");
         for (int r : grantResults) {
             if (r == PackageManager.PERMISSION_DENIED) {
                 this.callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.ERROR, "CALL_PHONE Permission Denied"));
@@ -308,7 +331,7 @@ public class CordovaCall extends CordovaPlugin {
         }
         switch (requestCode) {
             case CALL_PHONE_REQ_CODE:
-                this.sendCall();
+                this.sendCall(pendingConnId);
                 break;
             case REAL_PHONE_CALL:
                 this.callNumber();
@@ -395,7 +418,7 @@ public class CordovaCall extends CordovaPlugin {
         boolean isBluetoothScoOn = audioManager.isBluetoothScoOn();
         boolean isSpeakerphoneOn = audioManager.isSpeakerphoneOn();
 
-        Log.w(TAG, "getAudioMode: mode = " + mode + ", bluetooth: " + isBluetoothScoOn + ", speaker: " + isSpeakerphoneOn);
+        Log.v(TAG, "getAudioMode: mode = " + mode + ", bluetooth: " + isBluetoothScoOn + ", speaker: " + isSpeakerphoneOn);
 
         if (mode == AudioManager.MODE_IN_COMMUNICATION && isBluetoothScoOn) {
             return "bluetooth";
@@ -413,7 +436,7 @@ public class CordovaCall extends CordovaPlugin {
     }
 
     private Boolean setAudioMode(String mode) {
-        Log.w(TAG, "SetAudioMode:" + getAudioMode() + " -> " + mode);
+        Log.v(TAG, "SetAudioMode:" + getAudioMode() + " -> " + mode);
 
         if (mode.equals("bluetooth")) {
             return this.bluetoothOn();
@@ -424,16 +447,18 @@ public class CordovaCall extends CordovaPlugin {
         } else if (mode.equals("normal")) {
             return this.normalOn();
         } else {
-            Log.w(TAG, "SetAudioMode: invalid mode");
+            Log.e(TAG, "SetAudioMode: invalid mode");
         }
 
         return false;
     }
 
-    /** Private NEW API */
+    /**
+     * Private NEW API
+     */
 
     private boolean earpieceOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_WIRED_OR_EARPIECE);
         } else {
@@ -446,12 +471,12 @@ public class CordovaCall extends CordovaPlugin {
             audioManager.setSpeakerphoneOn(false);
         }
 
-        Log.w(TAG, "SetAudioMode: result = " + getAudioMode());
+        Log.v(TAG, "SetAudioMode: result = " + getAudioMode());
         return true;
     }
 
     private boolean bluetoothOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_BLUETOOTH);
         } else {
@@ -463,12 +488,12 @@ public class CordovaCall extends CordovaPlugin {
             audioManager.startBluetoothSco();
         }
 
-        Log.w(TAG, "SetAudioMode: result = " + getAudioMode());
+        Log.v(TAG, "SetAudioMode: result = " + getAudioMode());
         return true;
     }
 
     private boolean speakerOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_SPEAKER);
         } else {
@@ -481,12 +506,12 @@ public class CordovaCall extends CordovaPlugin {
             audioManager.setSpeakerphoneOn(true);
         }
 
-        Log.w(TAG, "SetAudioMode: result = " + getAudioMode());
+        Log.v(TAG, "SetAudioMode: result = " + getAudioMode());
         return true;
     }
 
     private boolean normalOn() {
-        Connection conn = MyConnectionService.getConnection();
+        Connection conn = MyConnectionService.getActiveConnection();
         if (conn != null) {
             conn.setAudioRoute(CallAudioState.ROUTE_EARPIECE);
         } else {
@@ -498,7 +523,7 @@ public class CordovaCall extends CordovaPlugin {
             releaseAudioFocus();
         }
 
-        Log.w(TAG, "SetAudioMode: result = " + getAudioMode());
+        Log.v(TAG, "SetAudioMode: result = " + getAudioMode());
         return true;
     }
 
@@ -542,7 +567,7 @@ public class CordovaCall extends CordovaPlugin {
                                 break;
                         }
 
-                        Log.w(TAG, "onAudioFocusChange: " + focusChange + " - " + focusChangeStr);
+                        Log.v(TAG, "onAudioFocusChange: " + focusChange + " - " + focusChangeStr);
                     }
                 };
 
@@ -552,7 +577,7 @@ public class CordovaCall extends CordovaPlugin {
         savedAudioMode = audioManager.getMode();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Log.w(TAG, "Request Audio Focus: Android >= O");
+            Log.v(TAG, "Request Audio Focus: Android >= O");
             AudioAttributes playbackAttributes = new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -565,20 +590,20 @@ public class CordovaCall extends CordovaPlugin {
                             .build();
             result = audioManager.requestAudioFocus(focusRequest);
         } else {
-            Log.w(TAG, "Request Audio Focus: Android < O");
+            Log.v(TAG, "Request Audio Focus: Android < O");
             result = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_VOICE_CALL,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
         }
 
         if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             isAudioFocused = true;
-            Log.w(TAG, "AudioFocus granted");
+            Log.v(TAG, "AudioFocus granted");
 
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-            Log.w(TAG, "AudioManager set mode to MODE_IN_COMMUNICATION");
+            Log.v(TAG, "AudioManager set mode to MODE_IN_COMMUNICATION");
         } else if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
             isAudioFocused = false;
-            Log.w(TAG, "AudioFocus failed");
+            Log.e(TAG, "AudioFocus failed");
         }
     }
 
